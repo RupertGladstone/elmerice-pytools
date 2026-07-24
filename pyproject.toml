@@ -1,0 +1,23 @@
+[project]
+name = "elmerice-pytools"
+version = "0.1.0"
+description = "Shared Python helpers for working with Elmer/Ice VTU output and meshes -- regridding, mesh I/O, node-sampling."
+requires-python = ">=3.9"
+dependencies = [
+    "numpy",
+    "pyvista",
+    "netCDF4",
+    "scipy",
+]
+
+[project.scripts]
+pvtu-to-netcdf = "elmerice_pytools.cli.pvtu_to_netcdf:main"
+vtu-to-node-netcdf = "elmerice_pytools.cli.vtu_to_node_netcdf:main"
+mismip-plus-geo = "elmerice_pytools.cli.mismip_plus_geo:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["elmerice_pytools*"]
