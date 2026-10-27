@@ -24,5 +24,5 @@ regridding, mesh I/O, node-sampling.
 ## Install
 
 ```
-pip install -e /home/rupert/Source/elmerice-pytools
+pip install -e /path/to/elmerice-pytools
 ```
