@@ -124,6 +124,96 @@ def _flatten_z(mesh):
     return flat
 
 
+def sum_point_data(mesh, name):
+    """Direct sum of a point-data field -- for an already-lumped, per-node
+    volumetric quantity, e.g. Elmer/GlaDS's "GLaDS GL flux" (a total m^3/a
+    already attributed to each grounding-line node by the solver, zero
+    elsewhere), where an area-weighted integral would double-count the
+    lumping Elmer already did. Compare against integrate_point_data_over_
+    triangles() below for a flux-density field that still needs area
+    weighting (e.g. "Grounded Melt", m/a) -- the two are the volumetric-flux
+    and flux-density halves of the same mass-balance check."""
+    if name not in mesh.point_data:
+        raise KeyError(f"{name!r} not found in point data; available: "
+                        f"{list(mesh.point_data.keys())}")
+    return float(np.sum(mesh.point_data[name]))
+
+
+def integrate_point_data_over_triangles(mesh, name):
+    """Proper finite-element area integral (the true "∫ f dA", via VTK's
+    vtkIntegrateAttributes) of a point-data field over mesh's 2D triangle
+    cells only -- for a flux-density field (e.g. Elmer/GlaDS's "Grounded
+    Melt", m/a) that needs area-weighting to become a volumetric total
+    (m^3/a) comparable to an already-lumped nodal total from
+    sum_point_data() above. Restricted to triangles (via extract_triangles)
+    since an Elmer VTU can mix in 1D boundary/edge cells (e.g. GlaDS channel
+    edges) alongside the 2D mesh; empirically vtkIntegrateAttributes already
+    keeps per-dimension integrals separate on its own, but there's no
+    documented guarantee of that, so this makes the restriction explicit
+    rather than relying on it."""
+    if name not in mesh.point_data:
+        raise KeyError(f"{name!r} not found in point data; available: "
+                        f"{list(mesh.point_data.keys())}")
+    triangles = extract_triangles(mesh)
+    integrated = triangles.integrate_data()
+    return float(integrated.point_data[name][0])
+
+
+def sum_area_where_all_nodes(mesh, field_name, predicate):
+    """Sum the area of 2D triangle cells for which `predicate` holds for
+    every one of the cell's own 3 nodes' `field_name` value. E.g. Elmer's
+    grounded-ice area convention (GroundedSolver's GroundedMask: 1 grounded,
+    0 grounding-line node, -1 floating), where a cell only counts as
+    "grounded" if none of its nodes are floating:
+
+        sum_area_where_all_nodes(mesh, "groundedmask", lambda v: v != -1)
+
+    `predicate` is applied once, vectorized, over the whole field array (not
+    called per-node), so it must accept and return a numpy array."""
+    if field_name not in mesh.point_data:
+        raise KeyError(f"{field_name!r} not found in point data; available: "
+                        f"{list(mesh.point_data.keys())}")
+    triangles = extract_triangles(mesh)
+    triangles = triangles.compute_cell_sizes(length=False, area=True, volume=False)
+    conn = triangles.cells_dict[VTK_TRIANGLE]
+    keep_node = predicate(triangles.point_data[field_name])
+    keep_cell = keep_node[conn].all(axis=1)
+    return float(triangles.cell_data["Area"][keep_cell].sum())
+
+
+def integrate_point_data_where_all_nodes(mesh, mask_field_name, predicate, data_field_name):
+    """Area-integral of `data_field_name` (a flux-density field, e.g. m/a)
+    over 2D triangle cells for which `predicate` holds for every one of the
+    cell's own 3 nodes' `mask_field_name` value -- the same
+    node-classified-cell convention as sum_area_where_all_nodes, but
+    integrating a data field over the kept cells instead of summing their
+    area. E.g. total volumetric melt flux under floating ice:
+
+        integrate_point_data_where_all_nodes(mesh, "groundedmask",
+                                              lambda v: v != 1, "meltrate")
+
+    (excludes any cell touching a grounded (== 1) node -- the mirror image
+    of sum_area_where_all_nodes's "grounded" convention, so a genuine
+    straddling grounding-line cell with both grounded and floating nodes is
+    excluded from both totals rather than double-counted in either.)
+
+    `predicate` is applied once, vectorized, over the whole field array (not
+    called per-node), so it must accept and return a numpy array."""
+    if mask_field_name not in mesh.point_data:
+        raise KeyError(f"{mask_field_name!r} not found in point data; "
+                        f"available: {list(mesh.point_data.keys())}")
+    if data_field_name not in mesh.point_data:
+        raise KeyError(f"{data_field_name!r} not found in point data; "
+                        f"available: {list(mesh.point_data.keys())}")
+    triangles = extract_triangles(mesh)
+    conn = triangles.cells_dict[VTK_TRIANGLE]
+    keep_node = predicate(triangles.point_data[mask_field_name])
+    keep_cell = keep_node[conn].all(axis=1)
+    kept = triangles.extract_cells(np.where(keep_cell)[0])
+    integrated = kept.integrate_data()
+    return float(integrated.point_data[data_field_name][0])
+
+
 def sample_fields_at_points(source_mesh, xy, field_names):
     """Sample point-data fields from source_mesh at arbitrary (N, 2) xy
     locations (e.g. a different mesh's own nodes, or a structured grid
